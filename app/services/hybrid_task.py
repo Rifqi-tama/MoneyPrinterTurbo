@@ -31,7 +31,7 @@ def start(
     footage, so the first version finishes at a reviewable local video artifact.
     """
     scene_count = max(1, min(int(scene_count), 12))
-    max_ai_clips = max(0, min(int(max_ai_clips), scene_count))
+    max_ai_clips = max(0, min(int(max_ai_clips), 12))
 
     sm.state.update_task(task_id, state=const.TASK_STATE_PROCESSING, progress=3)
 
@@ -62,30 +62,7 @@ def start(
         return _fail(task_id, "script", str(video_script or "failed to generate script"))
     params.video_script = video_script
 
-    terms = scene_planner.normalize_terms(params.video_terms)
-    if not terms:
-        logger.info("\n\n## generating ordered hybrid scene terms")
-        try:
-            terms = scene_planner.normalize_terms(
-                llm.generate_terms(
-                    video_subject=params.video_subject,
-                    video_script=video_script,
-                    amount=scene_count,
-                    match_script_order=True,
-                )
-            )
-        except Exception as exc:
-            return _fail(
-                task_id,
-                "terms",
-                f"failed to generate hybrid scene terms: {type(exc).__name__}: {exc}",
-            )
-    if not terms:
-        return _fail(task_id, "terms", "failed to generate hybrid scene terms")
-    params.video_terms = terms[:scene_count]
-    task.save_script_data(task_id, video_script, params.video_terms, params)
-
-    sm.state.update_task(task_id, state=const.TASK_STATE_PROCESSING, progress=18)
+    sm.state.update_task(task_id, state=const.TASK_STATE_PROCESSING, progress=16)
     audio_file, audio_duration, sub_maker = task.generate_audio(
         task_id,
         params,
@@ -98,6 +75,29 @@ def start(
         math.ceil(float(audio_duration) / max(int(params.video_clip_duration), 1))
     )
     effective_scene_count = min(12, max(scene_count, required_for_duration))
+
+    terms = scene_planner.normalize_terms(params.video_terms)
+    if not terms:
+        logger.info("\n\n## generating ordered hybrid scene terms")
+        try:
+            terms = scene_planner.normalize_terms(
+                llm.generate_terms(
+                    video_subject=params.video_subject,
+                    video_script=video_script,
+                    amount=effective_scene_count,
+                    match_script_order=True,
+                )
+            )
+        except Exception as exc:
+            return _fail(
+                task_id,
+                "terms",
+                f"failed to generate hybrid scene terms: {type(exc).__name__}: {exc}",
+            )
+    if not terms:
+        return _fail(task_id, "terms", "failed to generate hybrid scene terms")
+    params.video_terms = terms[:effective_scene_count]
+    task.save_script_data(task_id, video_script, params.video_terms, params)
 
     sm.state.update_task(task_id, state=const.TASK_STATE_PROCESSING, progress=28)
     subtitle_path = task.generate_subtitle(
