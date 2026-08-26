@@ -56,6 +56,58 @@ def test_ai_budget_is_a_ceiling_not_a_quota():
     assert selected == [0]
 
 
+def test_preview_lock_prevents_paid_ai_from_moving_to_new_scene():
+    plan = scene_planner.build_scene_plan(
+        video_script=(
+            "A futuristic city appears. "
+            "People work in an office. "
+            "A microscopic transformation happens. "
+            "A surreal galaxy fills the final scene."
+        ),
+        video_terms=[
+            "futuristic city",
+            "people office",
+            "microscopic transformation",
+            "surreal galaxy",
+        ],
+        scene_count=4,
+        stock_source="pexels",
+        ai_source="wavespeed",
+        max_ai_clips=3,
+    )
+
+    locked = scene_planner.lock_ai_scenes_to_preview(
+        plan,
+        approved_ai_scene_indices=[0, 2],
+        stock_source="pexels",
+        ai_source="wavespeed",
+    )
+
+    assert [scene.index for scene in locked if scene.source == "wavespeed"] == [0, 2]
+    assert locked[3].source == "pexels"
+
+
+def test_preview_lock_forces_render_time_extra_scenes_to_stock():
+    plan = scene_planner.build_scene_plan(
+        video_script="One. Two. Three. Four. Five.",
+        video_terms=["one", "two", "three", "four", "five"],
+        scene_count=5,
+        stock_source="pixabay",
+        ai_source="wavespeed",
+        max_ai_clips=4,
+    )
+
+    locked = scene_planner.lock_ai_scenes_to_preview(
+        plan,
+        approved_ai_scene_indices=[0],
+        stock_source="pixabay",
+        ai_source="wavespeed",
+    )
+
+    assert locked[0].source == "wavespeed"
+    assert {scene.source for scene in locked[1:]} == {"pixabay"}
+
+
 def test_stock_only_plan_never_selects_ai():
     plan = scene_planner.build_scene_plan(
         video_script="One idea. Another idea. Final idea.",

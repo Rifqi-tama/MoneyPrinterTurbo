@@ -176,3 +176,42 @@ def build_scene_plan(
             )
         )
     return plan
+
+
+def lock_ai_scenes_to_preview(
+    plan: Iterable[ScenePlanItem],
+    *,
+    approved_ai_scene_indices: Iterable[int],
+    stock_source: str,
+    ai_source: str,
+) -> list[ScenePlanItem]:
+    """Restrict paid AI usage to exact scene indexes approved in a preview.
+
+    Render-time narration duration may add scenes after the preview. Those extra
+    scenes must stay stock-only. This helper also prevents re-scoring from moving a
+    paid AI slot to a different scene the user did not review.
+    """
+    approved = {int(index) for index in approved_ai_scene_indices if int(index) >= 0}
+    locked: list[ScenePlanItem] = []
+    for scene in plan:
+        if scene.index in approved:
+            source = ai_source
+            reason = "approved AI scene from preview"
+        else:
+            source = stock_source
+            reason = (
+                scene.reason
+                if scene.source == stock_source
+                else "stock-only because this paid scene was not approved in preview"
+            )
+        locked.append(
+            ScenePlanItem(
+                index=scene.index,
+                narration=scene.narration,
+                visual_term=scene.visual_term,
+                source=source,
+                reason=reason,
+                ai_score=scene.ai_score,
+            )
+        )
+    return locked

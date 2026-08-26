@@ -52,8 +52,9 @@ dev = [
 ]
 
 [tool.ruff.lint.per-file-ignores]
-# WebUI 需要先把项目根目录加入 sys.path，随后才能导入 app 包。
+# WebUI entrypoints need to put the project root on sys.path before importing app.
 "webui/Main.py" = ["E402"]
+"webui/Rifqi.py" = ["E402"]
 
 [tool.coverage.run]
 # 统计分支覆盖率可以识别“代码行执行了，但条件的另一条分支从未验证”的情况，
