@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import math
+
 from loguru import logger
 
 from app.models import const
@@ -92,6 +94,11 @@ def start(
     if not audio_file:
         return _fail(task_id, "audio", "failed to prepare narration audio")
 
+    required_for_duration = int(
+        math.ceil(float(audio_duration) / max(int(params.video_clip_duration), 1))
+    )
+    effective_scene_count = min(12, max(scene_count, required_for_duration))
+
     sm.state.update_task(task_id, state=const.TASK_STATE_PROCESSING, progress=28)
     subtitle_path = task.generate_subtitle(
         task_id,
@@ -104,7 +111,7 @@ def start(
     plan = scene_planner.build_scene_plan(
         video_script=video_script,
         video_terms=params.video_terms,
-        scene_count=scene_count,
+        scene_count=effective_scene_count,
         stock_source=stock_source,
         ai_source=ai_source,
         max_ai_clips=max_ai_clips,
@@ -118,7 +125,8 @@ def start(
             "stock_source": stock_source,
             "ai_source": ai_source,
             "max_ai_clips": max_ai_clips,
-            "scene_count": len(plan),
+            "requested_scene_count": scene_count,
+            "effective_scene_count": len(plan),
         },
     )
 
@@ -129,7 +137,7 @@ def start(
         stock_source=stock_source,
         ai_source=ai_source,
         video_aspect=params.video_aspect,
-        audio_duration=audio_duration * params.video_count,
+        audio_duration=audio_duration,
         max_clip_duration=params.video_clip_duration,
     )
     task_artifacts.patch_script_data(task_id, hybrid_scene_results=scene_results)
