@@ -1,0 +1,56 @@
+name: Rifqi fork smoke
+
+on:
+  push:
+    branches: [main, "luna/**"]
+  pull_request:
+    branches: [main]
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Compile fork entrypoints
+        run: |
+          python -m py_compile \
+            turbo_cli.py \
+            app/services/scene_planner.py \
+            app/services/hybrid_material.py \
+            app/services/hybrid_task.py \
+            test/services/test_scene_planner.py \
+            test/services/test_hybrid_material.py \
+            test/test_turbo_cli_hybrid.py
+
+      - name: Sanity-check scene planner
+        run: |
+          python - <<'PY'
+          from app.services.scene_planner import build_scene_plan
+
+          plan = build_scene_plan(
+              video_script=(
+                  "A futuristic city appears. "
+                  "People work in an office. "
+                  "A microscopic transformation happens inside a battery."
+              ),
+              video_terms=[
+                  "futuristic city",
+                  "people working office",
+                  "microscopic battery transformation",
+              ],
+              scene_count=3,
+              stock_source="pexels",
+              ai_source="wavespeed",
+              max_ai_clips=2,
+          )
+          assert len(plan) == 3
+          assert sum(scene.source == "wavespeed" for scene in plan) <= 2
+          assert plan[0].source == "wavespeed"
+          PY
