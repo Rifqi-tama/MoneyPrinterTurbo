@@ -21,6 +21,8 @@ STOCK_FRIENDLY_HINTS = (
     "pasar", "pantai", "gunung", "hutan", "mobil",
 )
 
+AI_SELECTION_THRESHOLD = 2.0
+
 
 @dataclass(frozen=True)
 class ScenePlanItem:
@@ -137,9 +139,16 @@ def build_scene_plan(
         for index, narration in enumerate(narrations)
     ]
     ai_budget = min(max_ai_clips, len(narrations))
-    selected_ai = set(
-        sorted(range(len(narrations)), key=lambda index: (-scores[index], index))[:ai_budget]
+    ranked = sorted(
+        range(len(narrations)),
+        key=lambda index: (-scores[index], index),
     )
+    selected_ai: set[int] = set()
+    for index in ranked:
+        if len(selected_ai) >= ai_budget:
+            break
+        if index == 0 or scores[index] >= AI_SELECTION_THRESHOLD:
+            selected_ai.add(index)
 
     plan: list[ScenePlanItem] = []
     for index, narration in enumerate(narrations):
