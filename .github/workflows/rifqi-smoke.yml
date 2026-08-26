@@ -22,6 +22,7 @@ jobs:
         run: |
           python -m py_compile \
             turbo_cli.py \
+            webui/Rifqi.py \
             app/services/scene_planner.py \
             app/services/hybrid_material.py \
             app/services/hybrid_task.py \
@@ -32,25 +33,35 @@ jobs:
       - name: Sanity-check scene planner
         run: |
           python - <<'PY'
-          from app.services.scene_planner import build_scene_plan
+          from app.services.scene_planner import build_scene_plan, lock_ai_scenes_to_preview
 
           plan = build_scene_plan(
               video_script=(
                   "A futuristic city appears. "
                   "People work in an office. "
-                  "A microscopic transformation happens inside a battery."
+                  "A microscopic transformation happens inside a battery. "
+                  "A surreal galaxy appears at the end."
               ),
               video_terms=[
                   "futuristic city",
                   "people working office",
                   "microscopic battery transformation",
+                  "surreal galaxy",
               ],
-              scene_count=3,
+              scene_count=4,
               stock_source="pexels",
               ai_source="wavespeed",
-              max_ai_clips=2,
+              max_ai_clips=3,
           )
-          assert len(plan) == 3
-          assert sum(scene.source == "wavespeed" for scene in plan) <= 2
-          assert plan[0].source == "wavespeed"
+          assert len(plan) == 4
+          assert sum(scene.source == "wavespeed" for scene in plan) <= 3
+
+          locked = lock_ai_scenes_to_preview(
+              plan,
+              approved_ai_scene_indices=[0, 2],
+              stock_source="pexels",
+              ai_source="wavespeed",
+          )
+          assert [scene.index for scene in locked if scene.source == "wavespeed"] == [0, 2]
+          assert locked[3].source == "pexels"
           PY
