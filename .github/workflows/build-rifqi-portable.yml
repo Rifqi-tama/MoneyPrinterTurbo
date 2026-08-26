@@ -8,6 +8,7 @@ on:
       - ".github/workflows/build-rifqi-portable.yml"
       - "START_RIFQI.bat"
       - "SETTINGS.bat"
+      - "README_PORTABLE.txt"
       - "webui/Rifqi.py"
       - "app/services/hybrid_task.py"
       - "app/services/hybrid_material.py"
@@ -20,6 +21,7 @@ on:
       - ".github/workflows/build-rifqi-portable.yml"
       - "START_RIFQI.bat"
       - "SETTINGS.bat"
+      - "README_PORTABLE.txt"
       - "webui/Rifqi.py"
       - "app/services/hybrid_task.py"
       - "app/services/hybrid_material.py"
@@ -86,7 +88,8 @@ jobs:
           $rootFiles = @(
             'main.py', 'cli.py', 'turbo_cli.py',
             'config.example.toml', 'pyproject.toml', 'requirements.txt', 'uv.lock',
-            'webui.bat', 'webui.sh', 'START_RIFQI.bat', 'SETTINGS.bat'
+            'webui.bat', 'webui.sh', 'START_RIFQI.bat', 'SETTINGS.bat',
+            'README_PORTABLE.txt'
           )
           foreach ($file in $rootFiles) {
             $source = Join-Path $env:GITHUB_WORKSPACE $file
