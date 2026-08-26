@@ -32,6 +32,30 @@ def test_scene_plan_preserves_order_and_ai_budget():
     assert plan[1].source == "pexels"
 
 
+def test_ai_budget_is_a_ceiling_not_a_quota():
+    plan = scene_planner.build_scene_plan(
+        video_script=(
+            "A person opens a laptop in an office. "
+            "Coworkers sit in a meeting room. "
+            "Someone drinks coffee beside a laptop. "
+            "People walk home on a normal city street."
+        ),
+        video_terms=[
+            "person laptop office",
+            "people office meeting",
+            "coffee laptop office",
+            "people walking city street",
+        ],
+        scene_count=4,
+        stock_source="pexels",
+        ai_source="wavespeed",
+        max_ai_clips=3,
+    )
+
+    selected = [scene.index for scene in plan if scene.source == "wavespeed"]
+    assert selected == [0]
+
+
 def test_stock_only_plan_never_selects_ai():
     plan = scene_planner.build_scene_plan(
         video_script="One idea. Another idea. Final idea.",
