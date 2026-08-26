@@ -14,6 +14,18 @@ on:
       - "app/services/scene_planner.py"
       - "config.example.toml"
       - "docs/RIFQI_PORTABLE.md"
+  pull_request:
+    branches: [main]
+    paths:
+      - ".github/workflows/build-rifqi-portable.yml"
+      - "START_RIFQI.bat"
+      - "SETTINGS.bat"
+      - "webui/Rifqi.py"
+      - "app/services/hybrid_task.py"
+      - "app/services/hybrid_material.py"
+      - "app/services/scene_planner.py"
+      - "config.example.toml"
+      - "docs/RIFQI_PORTABLE.md"
 
 permissions:
   contents: write
@@ -139,12 +151,13 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: MoneyPrinterTurbo-Rifqi-Portable-Windows
-          path: ${{ env.PORTABLE_ARCHIVE }}
+          path: ${{ runner.temp }}/MoneyPrinterTurbo-Rifqi-Portable-Windows-build-*.7z
           if-no-files-found: error
           retention-days: 30
           compression-level: 0
 
       - name: Publish portable release
+        if: github.event_name != 'pull_request'
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
