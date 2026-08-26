@@ -24,7 +24,7 @@ The Rifqi fork adds a safer short-form workflow that mixes free stock footage wi
 
 The opening hook receives extra weight. Abstract, microscopic, futuristic, transformation, fantasy, space, and similarly difficult-to-source concepts are favored for AI. Common office, city, work, nature, and lifestyle shots are biased toward stock footage.
 
-The AI count is a hard ceiling, not a target that may be exceeded.
+The AI count is a hard ceiling, not a quota. Low-impact scenes remain on stock even when unused paid capacity is available, so the planner never spends credits merely to consume the configured budget.
 
 ## Hybrid execution
 
