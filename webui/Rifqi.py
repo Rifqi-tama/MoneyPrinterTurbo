@@ -130,6 +130,10 @@ with st.sidebar:
 
 
 st.subheader("1 · Build a generation plan")
+st.caption(
+    "Preview does not submit AI-video jobs. If the script/terms are generated for you, "
+    "your configured LLM provider may still have its own usage cost."
+)
 with st.form("planner_form"):
     left, right = st.columns([1.45, 1])
     with left:
@@ -155,13 +159,13 @@ with st.form("planner_form"):
     with right:
         mode = st.segmented_control(
             "Generation mode",
-            options=["Free", "Hybrid"],
-            default="Free",
+            options=["Stock only", "Hybrid"],
+            default="Stock only",
             help=(
-                "Free uses stock footage only. Hybrid may reserve high-impact scenes "
+                "Stock only uses stock footage. Hybrid may reserve high-impact scenes "
                 "for paid AI video."
             ),
-        ) or "Free"
+        ) or "Stock only"
         stock_source = st.selectbox(
             "Primary stock source", ["pexels", "pixabay", "coverr"]
         )
@@ -212,7 +216,9 @@ if preview_clicked:
                     ai_source="wavespeed",
                     max_ai_clips=max_paid_clips,
                 )
-                planned_ai = sum(scene.source == "wavespeed" for scene in plan)
+                approved_ai_scene_indices = [
+                    scene.index for scene in plan if scene.source == "wavespeed"
+                ]
                 settings = {
                     "subject": subject.strip(),
                     "script": script,
@@ -222,9 +228,8 @@ if preview_clicked:
                     "stock_source": stock_source,
                     "requested_scene_count": scene_count,
                     "scene_count": effective_scene_count,
-                    # The render ceiling is the number visibly selected in this preview,
-                    # never the larger slider budget that happened to be available.
-                    "approved_ai_clips": planned_ai,
+                    "approved_ai_scene_indices": approved_ai_scene_indices,
+                    "approved_ai_clips": len(approved_ai_scene_indices),
                     "video_aspect": video_aspect,
                     "video_clip_duration": video_clip_duration,
                     "voice_name": voice_name,
@@ -251,12 +256,18 @@ if saved:
         ai_source="wavespeed",
         max_ai_clips=saved_settings["approved_ai_clips"],
     )
+    plan = scene_planner.lock_ai_scenes_to_preview(
+        plan,
+        approved_ai_scene_indices=saved_settings["approved_ai_scene_indices"],
+        stock_source=saved_settings["stock_source"],
+        ai_source="wavespeed",
+    )
     planned_ai = sum(scene.source == "wavespeed" for scene in plan)
 
     st.subheader("2 · Review the plan")
     m1, m2, m3, m4 = st.columns(4)
     m1.metric("Scenes", len(plan))
-    m2.metric("Planned AI", planned_ai)
+    m2.metric("Approved AI", planned_ai)
     m3.metric("Paid ceiling", saved_settings["approved_ai_clips"])
     m4.metric("Primary stock", saved_settings["stock_source"].title())
 
@@ -267,10 +278,13 @@ if saved:
         )
 
     if planned_ai:
+        approved_labels = ", ".join(
+            str(index + 1) for index in saved_settings["approved_ai_scene_indices"]
+        )
         st.markdown(
-            f'<div class="warn">Preview selected <b>{planned_ai}</b> AI scene(s). '
-            f'This preview did <b>not</b> submit AI-video jobs. Rendering is capped at '
-            f'<b>{saved_settings["approved_ai_clips"]}</b> paid AI-video submission(s).</div>',
+            f'<div class="warn">AI is approved only for scene(s) <b>{approved_labels}</b>. '
+            f'This preview did <b>not</b> submit AI-video jobs. Any extra render-time '
+            f'scenes are forced to stock.</div>',
             unsafe_allow_html=True,
         )
     else:
@@ -299,12 +313,12 @@ if saved:
         )
     if planned_ai and not wavespeed_ready:
         st.warning(
-            "WaveSpeed is not configured. Add its API key or rebuild the plan in Free mode."
+            "WaveSpeed is not configured. Add its API key or rebuild the plan in Stock only mode."
         )
 
     if planned_ai:
         confirmed = st.checkbox(
-            f"I approve up to {saved_settings['approved_ai_clips']} paid AI-video submissions for this render",
+            f"I approve {planned_ai} paid AI-video scene(s) shown above",
             key="rifqi_paid_confirm",
         )
     else:
@@ -349,6 +363,9 @@ if saved:
                     scene_count=saved_settings["scene_count"],
                     max_ai_clips=saved_settings["approved_ai_clips"],
                     confirm_paid_video=bool(confirmed),
+                    approved_ai_scene_indices=saved_settings[
+                        "approved_ai_scene_indices"
+                    ],
                 )
             st.session_state["rifqi_last_render"] = {
                 "task_id": task_id,
