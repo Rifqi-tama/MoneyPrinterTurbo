@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 import json
+import math
 import os
+import re
 import sys
-from pathlib import Path
 from uuid import uuid4
 
 import streamlit as st
@@ -32,10 +33,8 @@ st.markdown(
 .hero {padding: 1.35rem 1.5rem; border: 1px solid rgba(128,128,128,.22); border-radius: 18px; margin-bottom: 1rem;}
 .hero h1 {margin: 0 0 .25rem 0; font-size: 2.1rem;}
 .hero p {margin: 0; opacity: .72;}
-.card {padding: 1rem 1.15rem; border: 1px solid rgba(128,128,128,.22); border-radius: 14px; margin: .4rem 0 1rem 0;}
-.muted {opacity: .68; font-size: .92rem;}
-.safe {padding: .75rem 1rem; border-radius: 12px; background: rgba(46, 160, 67, .10); border: 1px solid rgba(46,160,67,.28);}
-.warn {padding: .75rem 1rem; border-radius: 12px; background: rgba(210, 153, 34, .10); border: 1px solid rgba(210,153,34,.30);}
+.safe {padding: .75rem 1rem; border-radius: 12px; background: rgba(46,160,67,.10); border: 1px solid rgba(46,160,67,.28);}
+.warn {padding: .75rem 1rem; border-radius: 12px; background: rgba(210,153,34,.10); border: 1px solid rgba(210,153,34,.30);}
 div[data-testid="stMetric"] {border: 1px solid rgba(128,128,128,.18); padding: .8rem 1rem; border-radius: 13px;}
 </style>
 """,
@@ -82,7 +81,10 @@ def _make_script(subject: str, supplied_script: str, language: str) -> str:
         video_subject=subject,
         language=language or "",
         paragraph_number=1,
-        video_script_prompt="Create a concise, high-retention short-form video script with a strong opening hook.",
+        video_script_prompt=(
+            "Create a concise, high-retention short-form video script with a strong "
+            "opening hook. Keep it natural and easy to illustrate visually."
+        ),
         custom_system_prompt="",
     )
     if not script or str(script).startswith("Error: "):
@@ -104,6 +106,14 @@ def _make_terms(subject: str, script: str, scene_count: int) -> list[str]:
     return terms
 
 
+def _estimated_scene_count(script: str, requested: int, clip_duration: int) -> int:
+    """Conservatively size the preview so render rarely needs unseen extra scenes."""
+    words = re.findall(r"[\w'-]+", str(script or ""), flags=re.UNICODE)
+    estimated_seconds = max(1.0, len(words) / 2.0)
+    coverage_scenes = math.ceil(estimated_seconds / max(int(clip_duration), 1))
+    return min(12, max(int(requested), int(coverage_scenes)))
+
+
 with st.sidebar:
     st.subheader("Provider status")
     provider_rows = {
@@ -116,7 +126,7 @@ with st.sidebar:
         st.write(("✅" if ready else "⚪") + f" {name}")
     st.caption("Keys stay in config.toml and are never displayed here.")
     st.divider()
-    st.page_link("webui/Main.py", label="Open full upstream WebUI", icon="🛠️")
+    st.caption("Need the advanced settings UI? Run `webui.bat` separately.")
 
 
 st.subheader("1 · Build a generation plan")
@@ -147,9 +157,14 @@ with st.form("planner_form"):
             "Generation mode",
             options=["Free", "Hybrid"],
             default="Free",
-            help="Free uses stock footage only. Hybrid may reserve selected hero scenes for AI video.",
+            help=(
+                "Free uses stock footage only. Hybrid may reserve high-impact scenes "
+                "for paid AI video."
+            ),
         ) or "Free"
-        stock_source = st.selectbox("Primary stock source", ["pexels", "pixabay", "coverr"])
+        stock_source = st.selectbox(
+            "Primary stock source", ["pexels", "pixabay", "coverr"]
+        )
         scene_count = st.slider("Target scenes", 3, 10, 6)
         max_paid_clips = (
             st.slider("Maximum AI clips", 0, 4, 2)
@@ -158,12 +173,18 @@ with st.form("planner_form"):
         )
 
         with st.expander("Video settings"):
-            video_aspect = st.selectbox("Aspect ratio", ["9:16", "16:9", "1:1"], index=0)
+            video_aspect = st.selectbox(
+                "Aspect ratio", ["9:16", "16:9", "1:1"], index=0
+            )
             video_clip_duration = st.slider("Max clip duration", 3, 8, 5)
-            voice_name = st.text_input("Voice", value="en-US-JennyNeural-Female")
+            voice_name = st.text_input(
+                "Voice", value="en-US-JennyNeural-Female"
+            )
             subtitles = st.checkbox("Subtitles", value=True)
 
-    preview_clicked = st.form_submit_button("✨ Preview scene plan", use_container_width=True)
+    preview_clicked = st.form_submit_button(
+        "✨ Preview scene plan", use_container_width=True
+    )
 
 
 if preview_clicked:
@@ -173,15 +194,25 @@ if preview_clicked:
         try:
             with st.spinner("Creating script and ordered visual plan…"):
                 script = _make_script(subject.strip(), supplied_script, language)
-                terms = _make_terms(subject.strip() or "Custom script", script, scene_count)
+                effective_scene_count = _estimated_scene_count(
+                    script,
+                    scene_count,
+                    video_clip_duration,
+                )
+                terms = _make_terms(
+                    subject.strip() or "Custom script",
+                    script,
+                    effective_scene_count,
+                )
                 plan = scene_planner.build_scene_plan(
                     video_script=script,
                     video_terms=terms,
-                    scene_count=scene_count,
+                    scene_count=effective_scene_count,
                     stock_source=stock_source,
                     ai_source="wavespeed",
                     max_ai_clips=max_paid_clips,
                 )
+                planned_ai = sum(scene.source == "wavespeed" for scene in plan)
                 settings = {
                     "subject": subject.strip(),
                     "script": script,
@@ -189,8 +220,11 @@ if preview_clicked:
                     "language": language,
                     "mode": mode,
                     "stock_source": stock_source,
-                    "scene_count": scene_count,
-                    "max_paid_clips": max_paid_clips,
+                    "requested_scene_count": scene_count,
+                    "scene_count": effective_scene_count,
+                    # The render ceiling is the number visibly selected in this preview,
+                    # never the larger slider budget that happened to be available.
+                    "approved_ai_clips": planned_ai,
                     "video_aspect": video_aspect,
                     "video_clip_duration": video_clip_duration,
                     "voice_name": voice_name,
@@ -200,6 +234,7 @@ if preview_clicked:
                     "settings": settings,
                     "plan": [scene.to_dict() for scene in plan],
                 }
+                st.session_state.pop("rifqi_paid_confirm", None)
         except Exception as exc:
             st.session_state.pop("rifqi_generation_plan", None)
             st.error(f"Could not build the plan: {type(exc).__name__}: {exc}")
@@ -214,7 +249,7 @@ if saved:
         scene_count=saved_settings["scene_count"],
         stock_source=saved_settings["stock_source"],
         ai_source="wavespeed",
-        max_ai_clips=saved_settings["max_paid_clips"],
+        max_ai_clips=saved_settings["approved_ai_clips"],
     )
     planned_ai = sum(scene.source == "wavespeed" for scene in plan)
 
@@ -222,14 +257,20 @@ if saved:
     m1, m2, m3, m4 = st.columns(4)
     m1.metric("Scenes", len(plan))
     m2.metric("Planned AI", planned_ai)
-    m3.metric("Paid ceiling", saved_settings["max_paid_clips"])
+    m3.metric("Paid ceiling", saved_settings["approved_ai_clips"])
     m4.metric("Primary stock", saved_settings["stock_source"].title())
+
+    if saved_settings["scene_count"] > saved_settings["requested_scene_count"]:
+        st.caption(
+            "The preview added scenes for conservative narration coverage; this does "
+            "not increase the AI-video ceiling."
+        )
 
     if planned_ai:
         st.markdown(
-            f'<div class="warn">Preview created <b>{planned_ai}</b> AI candidate scene(s). '
-            f'This preview did <b>not</b> submit AI-video jobs. Rendering can submit at most '
-            f'<b>{saved_settings["max_paid_clips"]}</b> paid AI-video job(s).</div>',
+            f'<div class="warn">Preview selected <b>{planned_ai}</b> AI scene(s). '
+            f'This preview did <b>not</b> submit AI-video jobs. Rendering is capped at '
+            f'<b>{saved_settings["approved_ai_clips"]}</b> paid AI-video submission(s).</div>',
             unsafe_allow_html=True,
         )
     else:
@@ -243,9 +284,27 @@ if saved:
         st.write(saved_settings["script"])
 
     st.subheader("3 · Render")
+    stock_key_name = {
+        "pexels": "pexels_api_keys",
+        "pixabay": "pixabay_api_keys",
+        "coverr": "coverr_api_keys",
+    }[saved_settings["stock_source"]]
+    stock_ready = _has_config_value(stock_key_name)
+    wavespeed_ready = _has_config_value("wavespeed_api_keys")
+
+    if not stock_ready:
+        st.warning(
+            f"{saved_settings['stock_source'].title()} is not configured. Add its API key "
+            "in config.toml or the full upstream WebUI before rendering."
+        )
+    if planned_ai and not wavespeed_ready:
+        st.warning(
+            "WaveSpeed is not configured. Add its API key or rebuild the plan in Free mode."
+        )
+
     if planned_ai:
         confirmed = st.checkbox(
-            f"I approve up to {saved_settings['max_paid_clips']} paid AI-video submissions for this render",
+            f"I approve up to {saved_settings['approved_ai_clips']} paid AI-video submissions for this render",
             key="rifqi_paid_confirm",
         )
     else:
@@ -256,11 +315,12 @@ if saved:
         "LLM or other provider usage may have separate charges."
     )
 
+    render_ready = stock_ready and (not planned_ai or wavespeed_ready) and confirmed
     render_clicked = st.button(
         "🎬 Render video",
         type="primary",
         use_container_width=True,
-        disabled=not confirmed,
+        disabled=not render_ready,
     )
 
     if render_clicked:
@@ -269,7 +329,7 @@ if saved:
                 video_subject=saved_settings["subject"],
                 video_script=saved_settings["script"],
                 video_terms=saved_settings["terms"],
-                video_source="hybrid",
+                video_source=saved_settings["stock_source"],
                 video_aspect=saved_settings["video_aspect"],
                 video_count=1,
                 video_clip_duration=saved_settings["video_clip_duration"],
@@ -278,14 +338,16 @@ if saved:
                 video_language=saved_settings["language"],
             )
             task_id = str(uuid4())
-            with st.spinner("Rendering… stock fallbacks and paid-safety guards are active."):
+            with st.spinner(
+                "Rendering… stock fallbacks and paid-safety guards are active."
+            ):
                 result = hybrid_task.start(
                     task_id,
                     params,
                     stock_source=saved_settings["stock_source"],
                     ai_source="wavespeed",
                     scene_count=saved_settings["scene_count"],
-                    max_ai_clips=saved_settings["max_paid_clips"],
+                    max_ai_clips=saved_settings["approved_ai_clips"],
                     confirm_paid_video=bool(confirmed),
                 )
             st.session_state["rifqi_last_render"] = {
@@ -313,4 +375,7 @@ if last_render:
         st.error(error or "The render did not produce a final video.")
 
     with st.expander("Render details"):
-        st.code(json.dumps(result, ensure_ascii=False, default=str, indent=2), language="json")
+        st.code(
+            json.dumps(result, ensure_ascii=False, default=str, indent=2),
+            language="json",
+        )
