@@ -1,0 +1,180 @@
+name: Build Rifqi Portable
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/build-rifqi-portable.yml"
+      - "START_RIFQI.bat"
+      - "SETTINGS.bat"
+      - "README_PORTABLE.txt"
+      - "webui/Rifqi.py"
+      - "app/services/hybrid_task.py"
+      - "app/services/hybrid_material.py"
+      - "app/services/scene_planner.py"
+      - "config.example.toml"
+      - "docs/RIFQI_PORTABLE.md"
+  pull_request:
+    branches: [main]
+    paths:
+      - ".github/workflows/build-rifqi-portable.yml"
+      - "START_RIFQI.bat"
+      - "SETTINGS.bat"
+      - "README_PORTABLE.txt"
+      - "webui/Rifqi.py"
+      - "app/services/hybrid_task.py"
+      - "app/services/hybrid_material.py"
+      - "app/services/scene_planner.py"
+      - "config.example.toml"
+      - "docs/RIFQI_PORTABLE.md"
+
+permissions:
+  contents: write
+
+jobs:
+  build-windows-portable:
+    runs-on: windows-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout Rifqi fork
+        uses: actions/checkout@v4
+
+      - name: Download latest official portable runtime
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $headers = @{ 'User-Agent' = 'MoneyPrinterTurbo-Rifqi-Portable-Builder' }
+          $release = Invoke-RestMethod -Headers $headers -Uri 'https://api.github.com/repos/harry0703/MoneyPrinterTurbo/releases/latest'
+          $asset = $release.assets | Where-Object { $_.name -like 'MoneyPrinterTurbo-Portable-Windows-*.7z' } | Select-Object -First 1
+          if (-not $asset) { throw 'Official Windows portable asset was not found in the latest upstream release.' }
+          $archive = Join-Path $env:RUNNER_TEMP 'upstream-portable.7z'
+          Invoke-WebRequest -Headers $headers -Uri $asset.browser_download_url -OutFile $archive
+          "UPSTREAM_TAG=$($release.tag_name)" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "UPSTREAM_ARCHIVE=$archive" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          Write-Host "Using upstream runtime $($release.tag_name): $($asset.name)"
+
+      - name: Extract upstream portable runtime
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $extractRoot = Join-Path $env:RUNNER_TEMP 'portable-base'
+          New-Item -ItemType Directory -Force -Path $extractRoot | Out-Null
+          & 7z x $env:UPSTREAM_ARCHIVE "-o$extractRoot" -y | Out-Host
+          if ($LASTEXITCODE -ne 0) { throw "7z extraction failed with exit code $LASTEXITCODE" }
+          $entries = @(Get-ChildItem -LiteralPath $extractRoot)
+          if ($entries.Count -eq 1 -and $entries[0].PSIsContainer) {
+            $bundle = $entries[0].FullName
+          } else {
+            $bundle = $extractRoot
+          }
+          "BUNDLE_ROOT=$bundle" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          Write-Host "Portable root: $bundle"
+
+      - name: Overlay Rifqi Edition source
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          function Mirror-Dir([string]$source, [string]$dest) {
+            & robocopy $source $dest /MIR /NFL /NDL /NJH /NJS /NP
+            if ($LASTEXITCODE -gt 7) { throw "robocopy failed with exit code $LASTEXITCODE" }
+            $global:LASTEXITCODE = 0
+          }
+
+          Mirror-Dir (Join-Path $env:GITHUB_WORKSPACE 'app') (Join-Path $env:BUNDLE_ROOT 'app')
+          Mirror-Dir (Join-Path $env:GITHUB_WORKSPACE 'webui') (Join-Path $env:BUNDLE_ROOT 'webui')
+
+          $rootFiles = @(
+            'main.py', 'cli.py', 'turbo_cli.py',
+            'config.example.toml', 'pyproject.toml', 'requirements.txt', 'uv.lock',
+            'webui.bat', 'webui.sh', 'START_RIFQI.bat', 'SETTINGS.bat',
+            'README_PORTABLE.txt'
+          )
+          foreach ($file in $rootFiles) {
+            $source = Join-Path $env:GITHUB_WORKSPACE $file
+            if (Test-Path -LiteralPath $source) {
+              Copy-Item -LiteralPath $source -Destination (Join-Path $env:BUNDLE_ROOT $file) -Force
+            }
+          }
+
+          $docsSource = Join-Path $env:GITHUB_WORKSPACE 'docs'
+          if (Test-Path -LiteralPath $docsSource) {
+            Mirror-Dir $docsSource (Join-Path $env:BUNDLE_ROOT 'docs')
+          }
+
+          $localConfig = Join-Path $env:BUNDLE_ROOT 'config.toml'
+          if (Test-Path -LiteralPath $localConfig) { Remove-Item -LiteralPath $localConfig -Force }
+
+          @(
+            'MoneyPrinterTurbo - Rifqi Edition Portable',
+            "Fork commit: $env:GITHUB_SHA",
+            "Official runtime base: $env:UPSTREAM_TAG",
+            "Built: $([DateTime]::UtcNow.ToString('u')) UTC",
+            '',
+            'START: double-click START_RIFQI.bat',
+            'SETTINGS: double-click SETTINGS.bat'
+          ) | Set-Content -LiteralPath (Join-Path $env:BUNDLE_ROOT 'RIFQI_PORTABLE_VERSION.txt') -Encoding utf8
+
+      - name: Validate embedded runtime and fork code
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $python = Join-Path $env:BUNDLE_ROOT 'lib\python\python.exe'
+          if (-not (Test-Path -LiteralPath $python)) {
+            throw "Official portable Python runtime was not found at $python"
+          }
+          Push-Location $env:BUNDLE_ROOT
+          try {
+            & $python -m py_compile webui\Rifqi.py app\services\scene_planner.py app\services\hybrid_material.py app\services\hybrid_task.py turbo_cli.py
+            if ($LASTEXITCODE -ne 0) { throw 'Python compile smoke test failed.' }
+            & $python -c "import streamlit, moviepy; from app.services.scene_planner import build_scene_plan; p=build_scene_plan(video_script='A futuristic city appears. People work in an office.', video_terms=['futuristic city','people office'], scene_count=2, stock_source='pexels', ai_source='wavespeed', max_ai_clips=1); assert len(p)==2"
+            if ($LASTEXITCODE -ne 0) { throw 'Embedded runtime import smoke test failed.' }
+          } finally {
+            Pop-Location
+          }
+
+      - name: Create portable archive
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $name = "MoneyPrinterTurbo-Rifqi-Portable-Windows-build-$env:GITHUB_RUN_NUMBER.7z"
+          $archive = Join-Path $env:RUNNER_TEMP $name
+          Push-Location $env:BUNDLE_ROOT
+          try {
+            & 7z a -t7z -mx=5 $archive '.\*' | Out-Host
+            if ($LASTEXITCODE -ne 0) { throw "7z archive failed with exit code $LASTEXITCODE" }
+          } finally {
+            Pop-Location
+          }
+          "PORTABLE_ARCHIVE=$archive" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "PORTABLE_NAME=$name" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Upload workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: MoneyPrinterTurbo-Rifqi-Portable-Windows
+          path: ${{ runner.temp }}/MoneyPrinterTurbo-Rifqi-Portable-Windows-build-*.7z
+          if-no-files-found: error
+          retention-days: 30
+          compression-level: 0
+
+      - name: Publish portable release
+        if: github.event_name != 'pull_request'
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $tag = "rifqi-portable-build-$env:GITHUB_RUN_NUMBER"
+          $title = "MoneyPrinterTurbo Rifqi Portable build $env:GITHUB_RUN_NUMBER"
+          $notes = @"
+          Windows one-click portable build of Rifqi Edition.
+
+          - Base runtime: official MoneyPrinterTurbo $env:UPSTREAM_TAG portable package
+          - Fork commit: $env:GITHUB_SHA
+          - Start: extract the archive and double-click START_RIFQI.bat
+          - Advanced provider/settings UI: SETTINGS.bat
+          - No Python/uv installation required
+          "@
+          gh release create $tag $env:PORTABLE_ARCHIVE --repo $env:GITHUB_REPOSITORY --target $env:GITHUB_SHA --title $title --notes $notes --latest=false
