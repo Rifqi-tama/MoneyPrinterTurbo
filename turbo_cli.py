@@ -8,17 +8,32 @@ from uuid import uuid4
 
 from app.models import const
 from app.models.schema import VideoConcatMode, VideoParams
-from app.services import llm, task
+from app.services import hybrid_task, llm, task
 
 
 PAID_VIDEO_SOURCES = frozenset({"wavespeed"})
 FREE_VIDEO_SOURCES = frozenset({"pexels", "pixabay", "coverr"})
+HYBRID_VIDEO_SOURCE = "hybrid"
 
 
 def _positive_int(value: str) -> int:
     parsed = int(value)
     if parsed < 1:
         raise argparse.ArgumentTypeError("value must be >= 1")
+    return parsed
+
+
+def _non_negative_int(value: str) -> int:
+    parsed = int(value)
+    if parsed < 0:
+        raise argparse.ArgumentTypeError("value must be >= 0")
+    return parsed
+
+
+def _scene_count(value: str) -> int:
+    parsed = int(value)
+    if parsed < 2 or parsed > 12:
+        raise argparse.ArgumentTypeError("scene-count must be between 2 and 12")
     return parsed
 
 
@@ -35,14 +50,7 @@ def prepare_paid_video_params(
     *,
     max_paid_clips: int,
 ) -> VideoParams:
-    """Prepare a paid video task while enforcing a deterministic clip ceiling.
-
-    MoneyPrinterTurbo's stock-material flow can safely search many candidates, but
-    generated video providers charge per generation. For paid sources we resolve
-    the script and material terms *before* starting the normal task pipeline, then
-    cap those terms so the material service can never submit more than the user
-    approved number of generations.
-    """
+    """Prepare a paid video task while enforcing a deterministic clip ceiling."""
     if params.video_source not in PAID_VIDEO_SOURCES:
         return params
     if max_paid_clips < 1:
@@ -83,8 +91,8 @@ def prepare_paid_video_params(
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
-            "Safer MoneyPrinterTurbo entrypoint with explicit paid-video confirmation "
-            "and a hard maximum number of generated clips."
+            "Safer MoneyPrinterTurbo entrypoint with paid-video confirmation, "
+            "scene planning, and hybrid stock/AI footage."
         )
     )
     parser.add_argument("--video-subject", default="")
@@ -92,8 +100,20 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--video-terms", default="")
     parser.add_argument(
         "--video-source",
-        choices=sorted(FREE_VIDEO_SOURCES | PAID_VIDEO_SOURCES),
+        choices=sorted(FREE_VIDEO_SOURCES | PAID_VIDEO_SOURCES | {HYBRID_VIDEO_SOURCE}),
         default="pexels",
+    )
+    parser.add_argument(
+        "--stock-source",
+        choices=sorted(FREE_VIDEO_SOURCES),
+        default="pexels",
+        help="preferred free provider for hybrid scenes; other free sources are fallbacks",
+    )
+    parser.add_argument(
+        "--scene-count",
+        type=_scene_count,
+        default=6,
+        help="number of ordered narrative scenes used by hybrid mode",
     )
     parser.add_argument("--video-aspect", choices=("9:16", "16:9", "1:1"), default="9:16")
     parser.add_argument("--video-count", type=_positive_int, default=1)
@@ -102,23 +122,37 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--no-subtitles", action="store_true")
     parser.add_argument(
         "--max-paid-clips",
-        type=_positive_int,
-        default=3,
-        help="hard ceiling for paid generated-video submissions per task",
+        type=_non_negative_int,
+        default=2,
+        help="hard ceiling for paid AI clips; use 0 for stock-only hybrid mode",
     )
     parser.add_argument(
         "--confirm-paid-video",
         action="store_true",
-        help="required when a paid generated-video source is selected",
+        help="required whenever the selected mode can submit paid AI video requests",
     )
     args = parser.parse_args(argv)
 
     if not args.video_subject.strip() and not args.video_script.strip():
         parser.error("one of --video-subject or --video-script is required")
-    if args.video_source in PAID_VIDEO_SOURCES and not args.confirm_paid_video:
+
+    if args.video_source in PAID_VIDEO_SOURCES:
+        if args.max_paid_clips < 1:
+            parser.error("a paid-only video source requires --max-paid-clips >= 1")
+        if not args.confirm_paid_video:
+            parser.error(
+                f"--video-source {args.video_source} can create billable API requests; "
+                "re-run with --confirm-paid-video after reviewing --max-paid-clips"
+            )
+
+    if (
+        args.video_source == HYBRID_VIDEO_SOURCE
+        and args.max_paid_clips > 0
+        and not args.confirm_paid_video
+    ):
         parser.error(
-            f"--video-source {args.video_source} can create billable API requests; "
-            "re-run with --confirm-paid-video after reviewing --max-paid-clips"
+            "hybrid mode can create billable AI requests when --max-paid-clips is above 0; "
+            "use --confirm-paid-video or set --max-paid-clips 0"
         )
     return args
 
@@ -137,14 +171,25 @@ def run(argv: Sequence[str] | None = None) -> int:
         subtitle_enabled=not args.no_subtitles,
     )
 
-    if params.video_source in PAID_VIDEO_SOURCES:
-        params = prepare_paid_video_params(
-            params,
-            max_paid_clips=args.max_paid_clips,
-        )
-
     task_id = str(uuid4())
-    result = task.start(task_id, params, stop_at="video")
+    if params.video_source == HYBRID_VIDEO_SOURCE:
+        result = hybrid_task.start(
+            task_id,
+            params,
+            stock_source=args.stock_source,
+            ai_source="wavespeed",
+            scene_count=args.scene_count,
+            max_ai_clips=args.max_paid_clips,
+            confirm_paid_video=args.confirm_paid_video,
+        )
+    else:
+        if params.video_source in PAID_VIDEO_SOURCES:
+            params = prepare_paid_video_params(
+                params,
+                max_paid_clips=args.max_paid_clips,
+            )
+        result = task.start(task_id, params, stop_at="video")
+
     payload = {"task_id": task_id, "result": result}
     print(json.dumps(payload, ensure_ascii=False, default=str, indent=2))
 
